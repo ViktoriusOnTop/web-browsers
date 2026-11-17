@@ -1,0 +1,43 @@
+# SpiderMonkey -> emscripten (browser wasm). Phase 1 toolchain proof.
+# Based on js/src/devtools/automation/variants/wasi, retargeted to emscripten.
+mk_add_options MOZ_OBJDIR=$topsrcdir/../obj-js-emscripten
+
+ac_add_options --enable-project=js
+ac_add_options --target=wasm32-unknown-emscripten
+
+# wasm has no JIT codegen and (for now) no shared memory / threads.
+ac_add_options --disable-jit
+ac_add_options --disable-shared-js
+ac_add_options --disable-shared-memory
+
+# Portable Baseline Interpreter: required so the JS->wasm JIT's PBL hooks + Phase F
+# deopt-resume (WasmJitResumeViaPBL) are compiled (matches the full Chameleon build).
+ac_add_options --enable-portable-baseline-interp
+ac_add_options --enable-portable-baseline-interp-force
+
+# Trim heavy deps for the first build.
+ac_add_options --without-intl-api
+ac_add_options --without-system-zlib
+ac_add_options --disable-stdcxx-compat
+ac_add_options --disable-tests
+ac_add_options --disable-js-shell
+ac_add_options --disable-clang-plugin
+ac_add_options --disable-debug-symbols
+ac_add_options --enable-optimize
+
+# wasm SIMD: ENABLE_WASM_SIMD is auto-on for wasm32 (the in-process wasm interpreter
+# executes v128 ops), so the interp TUs need the wasm_simd128.h intrinsics, and
+# emscripten requires -msimd128 to accept the -msse2 mozglue SIMD.cpp paths. The
+# scalar interp TU opts back out via -mno-simd128 (js/src/wasm/moz.build).
+export CFLAGS="-msimd128"
+export CXXFLAGS="-msimd128"
+
+# Target compiler = emscripten; host tools = native clang.
+CC=emcc
+CXX=em++
+HOST_CC=clang
+HOST_CXX=clang++
+
+# GC zeal: lets the embedder force incremental marking (JS_SetGCZeal) to VALIDATE the
+# allocation feature inline shape-transition pre-barrier (plan §8.3b/d). zeal-off ~= release perf.
+ac_add_options --enable-gczeal

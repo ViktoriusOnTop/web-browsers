@@ -1,0 +1,12 @@
+{
+  "name": "chameleon-wasm-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Chameleon (Firefox engine) compiled to WebAssembly: the chameleon.js library and demo apps.",
+  "packageManager": "pnpm@9.12.0",
+  "scripts": {
+    "build": "pnpm --filter chameleon.js build",
+    "demo": "pnpm --filter embed-demo dev",
+    "chrome": "pnpm --filter chrome-demo dev"
+  }
+}

@@ -1,0 +1,60 @@
+# chameleon-wasm root repo: the embedder + build harness. Tracks source (embed*/,
+# *.cpp/.h/.sh, the source *.js, *.cjs, *.html, em_config, mozconfig.*, *.md,
+# toolchain/) and ignores everything regenerable: build trees, emscripten/native
+# build artifacts, the staged GRE, deps, logs, and render/test dumps.
+
+# --- mach/emscripten build trees (huge, fully regenerable) ---
+/obj-full-emscripten*/
+/obj-js-emscripten/
+
+# --- native / emscripten build artifacts ---
+# (.gitignore has no inline comments; keep patterns on their own lines)
+*.o
+*.a
+*.bc
+# libxul.stripped.so, lib*.stripped.so, ...
+*.so
+# chameleon.wasm, gltest.wasm, sm.wasm, test fixtures (all regenerable)
+*.wasm
+# chameleon.data and other emcc preload bundles
+*.data
+
+# zstd-compressed release artifacts + their manifest (make release)
+*.zst
+chameleon-assets.json
+
+*.worker.js
+# chameleon.js
+gltest.js
+socktest.js
+/web/sm.js
+
+gre-stage/
+
+node_modules/
+
+/firefox/
+
+/emsdk/
+
+demo/chrome/dist
+demo/embed/dist
+demo/chrome/public/chrome-assets.clobber
+demo/chrome/public/chrome-assets.json
+
+
+# --- logs & render/test artifacts ---
+*.log
+*.png
+*.bgra
+
+# --- OS / editor cruft ---
+.DS_Store
+*.swp
+*~
+
+# build error logs
+*.err
+
+# node deps (also as symlinks, e.g. a demo's node_modules)
+node_modules

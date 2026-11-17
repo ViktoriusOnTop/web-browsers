@@ -1,0 +1,4 @@
+packages:
+  - chameleon.js
+  - demo/embed
+  - demo/chrome

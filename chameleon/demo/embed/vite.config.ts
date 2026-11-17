@@ -1,0 +1,94 @@
+import { defineConfig, type Plugin } from 'vite';
+import { createRequire } from 'node:module';
+import path from 'node:path';
+import fs from 'node:fs';
+import { server as wisp, logging as wispLogging } from '@mercuryworkshop/wisp-js/server';
+
+// chameleon.js ships the emscripten engine artifacts next to its bundle (dist/).
+const require = createRequire(import.meta.url);
+const libDist = path.join(path.dirname(require.resolve('chameleon.js/package.json')), 'dist');
+// chameleon.js inlines chameleon.js + chameleon.worker.js + the zstd chameleon.data + the manifest;
+// the ONLY artifact the consumer serves is the wasm -- raw chameleon.wasm (debug) or
+// chameleon.wasm.zst (release). Serve/emit whichever chameleon.js actually built.
+const ENGINE = ['chameleon.wasm', 'chameleon.wasm.zst'];
+const mime = (n: string) =>
+  n.endsWith('.wasm') ? 'application/wasm' :
+    n.endsWith('.js') ? 'text/javascript' : 'application/octet-stream';
+
+// Serve the engine artifacts at the server root (/chameleon.*) in dev, and emit them
+// into the build output. (chameleon.js's loadEngine injects <script src="/chameleon.js">
+// and locateFile resolves /chameleon.wasm etc. relative to it.)
+function libxulEngine(): Plugin {
+  return {
+    name: 'libxul-engine',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const name = (req.url || '').split('?')[0].replace(/^\//, '');
+        if (ENGINE.includes(name) && fs.existsSync(path.join(libDist, name))) {
+          res.setHeader('Content-Type', mime(name));
+          res.setHeader('Cache-Control', 'no-store');  // always serve the freshly-built wasm
+          fs.createReadStream(path.join(libDist, name)).pipe(res);
+          return;
+        }
+        next();
+      });
+    },
+    generateBundle() {
+      for (const name of ENGINE) {
+        const p = path.join(libDist, name);
+        if (fs.existsSync(p)) {
+          this.emitFile({ type: 'asset', fileName: name, source: fs.readFileSync(p) });
+        }
+      }
+    },
+  };
+}
+
+// Run a WISP proxy (wisp-js) on the dev server itself, at ws(s)://<host>/wisp/.
+// The engine fetches http(s):// over it; the demo defaults its WISP field to this
+// endpoint. Only /wisp/ upgrades are claimed — Vite's HMR socket passes through.
+function wispProxy(): Plugin {
+  return {
+    name: 'wisp-proxy',
+    configureServer(server) {
+      // Headless tests (libcurltest.cjs) serve assets on a loopback port and
+      // load them in the embedded engine over WISP; wisp-js blocks loopback /
+      // private IPs by default, so opt in when explicitly testing.
+      // if (process.env.CHAMELEON_WISP_ALLOW_LOOPBACK) {
+      wisp.options.allow_loopback_ips = true;
+      wisp.options.allow_private_ips = true;
+      if (process.env.CHAMELEON_WISP_DEBUG) wispLogging.set_level(wispLogging.DEBUG);
+      // }
+      server.httpServer?.on('upgrade', (req, socket, head) => {
+        if ((req.url || '').startsWith('/wisp')) {
+          wisp.routeRequest(req, socket as any, head);
+        }
+      });
+    },
+  };
+}
+
+// SharedArrayBuffer (pthreads) requires cross-origin isolation.
+const coop = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+};
+
+// The served engine wasm -- whichever chameleon.js built (raw chameleon.wasm in debug, or
+// chameleon.wasm.zst in release). Injected as __CHAMELEON_WASM__ and passed to Chameleon's required
+// `wasm` option in main.ts.
+const wasmCompressed = fs.existsSync(path.join(libDist, 'chameleon.wasm.zst'));
+const CHAMELEON_WASM = { url: wasmCompressed ? '/chameleon.wasm.zst' : '/chameleon.wasm', compressed: wasmCompressed };
+
+export default defineConfig({
+  plugins: [libxulEngine(), wispProxy()],
+  define: { __CHAMELEON_WASM__: JSON.stringify(CHAMELEON_WASM) },
+  // chameleon.js is a workspace package under active rebuild; don't pre-bundle/cache
+  // it, so a plain reload picks up a fresh dist/chameleon.js (no `vite --force`).
+  optimizeDeps: { exclude: ['chameleon.js'] },
+  // main.ts uses top-level await (await chameleon.init()/load()); keep the build target
+  // modern so `vite build` doesn't reject it (dev already uses esnext).
+  build: { target: 'esnext' },
+  server: { headers: coop },
+  preview: { headers: coop },
+});

@@ -1,0 +1,37 @@
+{
+  "name": "chameleon.js",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Embeddable Chameleon (Firefox engine) compiled to WebAssembly. ESM library exporting a Chameleon API class.",
+  "main": "./dist/chameleon.js",
+  "module": "./dist/chameleon.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/chameleon.js",
+      "default": "./dist/chameleon.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "wasm"
+  ],
+  "scripts": {
+    "build:engine": "bash build-lib.sh",
+    "build:bundle": "rspack build",
+    "build:types": "tsc",
+    "build": "pnpm run build:engine && pnpm run build:bundle && pnpm run build:types",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mercuryworkshop/wisp-js": "^0.4.1",
+    "zstddec": "^0.2.0"
+  },
+  "devDependencies": {
+    "@rspack/cli": "^1.1.0",
+    "@rspack/core": "^1.1.0",
+    "typescript": "^5.6.0"
+  }
+}
