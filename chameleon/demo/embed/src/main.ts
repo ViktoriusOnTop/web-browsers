@@ -1,71 +1,78 @@
 import { Chameleon } from 'chameleon.js';
 
-// Injected by vite.config (define): the served engine wasm { url, compressed }.
 declare const __CHAMELEON_WASM__: { url: string; compressed: boolean };
 
 const canvas = document.getElementById('screen') as HTMLCanvasElement;
-const urlInput = document.getElementById('url') as HTMLInputElement;
-const wispInput = document.getElementById('wisp') as HTMLInputElement;
-const gpuToggle = document.getElementById('gpu') as HTMLInputElement;
-const jitToggle = document.getElementById('jit') as HTMLInputElement;
 
-// Engine options are consumed when the engine boots (CHAMELEON_GPU / GECKO_NOWASMJIT
-// are read once at init, WISP installs in preRun), so they're persisted and
-// applied on reload rather than live. The Vite dev server runs a WISP proxy at
-// /wisp/ on this same origin; default the endpoint to it.
-const LS_KEY = 'libxul-demo-opts';
-const URL_KEY = 'libxul-demo-url';        // last URL typed into the address bar, persisted
-const savedUrl = localStorage.getItem(URL_KEY) ?? '';
-const defaultWisp = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/wisp/`;
-interface Opts { gpu: boolean; jit: boolean; wisp: string; }
-const saved: Partial<Opts> = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
-const opts: Opts = {
-  gpu: saved.gpu ?? false,   // default software (CHAMELEON_GPU absent)
-  jit: saved.jit ?? true,    // wasm JIT on unless GECKO_NOWASMJIT is set
-  wisp: saved.wisp ?? defaultWisp,
-};
+function resizeCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(window.innerWidth * dpr);
+  canvas.height = Math.floor(window.innerHeight * dpr);
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
 
-wispInput.value = opts.wisp;
-gpuToggle.checked = opts.gpu;
-jitToggle.checked = opts.jit;
-if (savedUrl) urlInput.value = savedUrl;
+const params = new URLSearchParams(location.search);
 
-// GPU is presence-gated; the wasm JIT is on by default and disabled by GECKO_NOWASMJIT.
-// With GPU on, also route content WebGL to a real host GL context (CHAMELEON_GL_PASSTHROUGH).
-// Embedder-side knobs use the CHAMELEON_* prefix; the knobs the engine itself reads
-// (GECKO_WR_DIRECT, GECKO_NOWASMJIT, ...) keep their names -- firefox/ reads them.
+//docs:base64-url not base64 (not that different @oslojs/encoding is pretty good for encoding
+function decodeB64Url(value: string): string | null {
+  if (!value) return null;
+  let b64 = value.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = b64.length % 4;
+  if (pad) b64 += '='.repeat(4 - pad);
+  try {
+    const binary = atob(b64);
+    return new TextDecoder().decode(Uint8Array.from(binary, (c) => c.charCodeAt(0)));
+  } catch (e) {
+    console.warn('[demo] bad base64url:', e);
+    return null;
+  }
+}
+
+//docs:stuff like google.com autocorrects to https://google.com/ dont you worry little children
+function normalize(input: string): string {
+  const s = input.trim();
+  if (!s) return '';
+  if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return s;
+  return 'https://' + s;
+}
+
+//docs:url is a /web/then a base 64 encoded version of the URL
+const urlMatch = /^\/web\/([^/]+)/.exec(location.pathname);
+const target = normalize(urlMatch ? decodeB64Url(urlMatch[1]) || '' : '');
+
+const encodedWisp = params.get('wisp');
+const wispUrl = encodedWisp ? decodeB64Url(encodedWisp) || '' : ''; //docs:put the wisp under ?wisp=b64url of wisp. YES ITS NEEDED, you can test wisps and then pass it in
+
 const env: Record<string, string> = {};
-if (opts.gpu) {
-  env.CHAMELEON_GPU = '1';
-  env.CHAMELEON_GL_PASSTHROUGH = '1';
-  // Hand the WebRender display-list transaction straight to the in-process
-  // compositor thread (skip the content->compositor IPDL Pickle round-trip). Opt-in
-  // engine flag; see WebRenderBridgeChild/Parent InProcess* path.
-  env.GECKO_WR_DIRECT = '1';
-  // Async pan/zoom: scroll on the compositor (now correctly targets nested
-  // overflow:scroll containers via the GetDocument/SetTargetAPZC fix).
-  env.CHAMELEON_APZ = '1';
+if (location.protocol === 'file:') env.CHAMELEON_SKIP_OPFS = '1';
+const hostEnv = (window as unknown as { CHAMELEON_ENV?: Record<string, string> }).CHAMELEON_ENV;
+if (hostEnv) Object.assign(env, hostEnv);
+//docs:for debugging, ?env.<KEY>=<VALUE> edits envs for chameleon
+for (const [k, v] of params) {
+  if (!k.startsWith('env.')) continue;
+  if (v === '') delete env[k.slice(4)];
+  else env[k.slice(4)] = v;
 }
-if (!opts.jit) env.GECKO_NOWASMJIT = '1';
 
-// Generic `?env.FOO=bar` knob: forward arbitrary engine env vars (e.g.
-// ?env.GECKO_WASM_INTERP=1 to run content WebAssembly in the in-process
-// interpreter). Useful for headless testing.
-for (const [k, v] of new URLSearchParams(location.search)) {
-  if (k.startsWith('env.')) env[k.slice(4)] = v;
+const jit = (params.get('jit') || 'off').toLowerCase() === 'on'; //docs:?jit=on or off (off by default)
+if (jit) delete env.CHAMELEON_NOWASMJIT;
+else env.CHAMELEON_NOWASMJIT = '1';
+
+const gpu = (params.get('gpu') || 'off').toLowerCase() !== 'off'; //docs:gpu on or off (errors by default, make your site test then load)
+const gl = (params.get('gl') || 'on').toLowerCase(); //docs:webgl passthrough ?gl=off and no need for ?gl=on but you can do it ig (passthrough by defauly)
+if (gpu) {
+  env.CHAMELEON_GPU = '1';
+  env.GECKO_WR_DIRECT = '1';
+  env.CHAMELEON_APZ = '1';
+  if (gl !== 'off') env.CHAMELEON_GL_PASSTHROUGH = '1';
 }
-// Env override injected by a host page (e.g. the nested embed-demo-in-embed-demo
-// harness sets CHAMELEON_SKIP_OPFS=1, since the URL query is stripped on the inner
-// engine's content navigation).
-const geEnv = (window as unknown as { CHAMELEON_ENV?: Record<string, string> }).CHAMELEON_ENV;
-if (geEnv) Object.assign(env, geEnv);
+if (gl === 'off') env.CHAMELEON_GL_PASSTHROUGH = '0';
 
 const chameleon = new Chameleon({
   canvas,
-  // The vite plugin serves the engine wasm at the server root; __CHAMELEON_WASM__ (injected
-  // by vite.config) is { url, compressed } for whichever wasm chameleon.js built.
   wasm: __CHAMELEON_WASM__,
-  wispUrl: opts.wisp.trim() || undefined,
+  wispUrl: wispUrl.trim() || undefined,
   env,
   print: (s) => console.log('[chameleon]', s),
   printErr: (s) => console.warn('[chameleon]', s),
@@ -73,49 +80,21 @@ const chameleon = new Chameleon({
 
 await chameleon.init();
 console.log('[demo] engine ready');
-// Expose the engine for headless tests / debugging.
-(window as unknown as { chameleon: Chameleon; __chameleonReady: boolean }).chameleon = chameleon;
-(window as unknown as { __chameleonReady: boolean }).__chameleonReady = true;
+Object.assign(window, { chameleon, __chameleonReady: true });
 
-// Persist the current control values and restart the engine to apply them.
-function applyAndReload(): void {
-  const next: Opts = { gpu: gpuToggle.checked, jit: jitToggle.checked, wisp: wispInput.value.trim() };
-  localStorage.setItem(LS_KEY, JSON.stringify(next));
-  location.reload();
-}
-gpuToggle.addEventListener('change', applyAndReload);
-jitToggle.addEventListener('change', applyAndReload);
-wispInput.addEventListener('change', applyAndReload);  // fires on commit (Enter/blur), not per keystroke
-
-// Keep an explicit scheme (http:, data:, about:, …); otherwise treat as host → https://.
-function normalizeUrl(input: string): string {
-  const s = input.trim();
-  if (!s) return '';
-  if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return s;
-  return 'https://' + s;
-}
-
-urlInput.addEventListener('keydown', (e) => {
-  if (e.key !== 'Enter') return;
-  const url = normalizeUrl(urlInput.value);
-  if (url) {
-    localStorage.setItem(URL_KEY, urlInput.value);  // persist the typed URL across reloads
-    chameleon.load(url);
-  }
-});
-
-// Initial page: an inline welcome doc (renders with no proxy).
-const page = `<!doctype html><meta charset="utf-8">
+const welcome = `<!doctype html><meta charset="utf-8">
 <body style="font-family:sans-serif;padding:2rem;line-height:1.5">
   <h1 style="color:#b5179e;margin-top:0">chameleon.js</h1>
-  <p>This page is being laid out and painted by <b>Chameleon</b> — Firefox's engine,
-     compiled to WebAssembly — entirely inside your browser tab.</p>
-  <p>Type a URL above and press Enter. <code>about:</code>/<code>data:</code> URLs
-     work out of the box; <code>https://</code> sites go through the dev server's
-     WISP proxy.</p>
-  <input placeholder="type here (input is forwarded to the engine)" style="padding:.4rem;width:60%">
-</body>`;
-// Always show the welcome doc on load; the persisted URL only pre-fills the address
-// bar (press Enter to load it) — we don't auto-navigate.
-await chameleon.load('data:text/html,' + encodeURIComponent(page));
-console.log('[demo] page loaded');
+  <p>Don't you dare use this basic template on your actual site</p>
+</body>`;//docs:edit this with a HTML for a default site, and then make your home page point to /web/
+
+const url = target || 'data:text/html,' + encodeURIComponent(welcome);
+try {
+  await chameleon.load(url);
+  Object.assign(window, { __chameleonUrl: url, __chameleonError: null });
+  console.log('[demo] page loaded', url);
+} catch (e) {
+  const message = String((e && (e as Error).message) || e);
+  Object.assign(window, { __chameleonUrl: null, __chameleonError: message });
+  console.warn('[demo] load failed', url, message);
+}
