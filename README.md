@@ -93,7 +93,7 @@ Bare hosts such as `google.com` are normalised to `https://google.com`. With no 
 
 | Parameter | Default | Effect |
 | --- | --- | --- |
-| `?wisp=<b64url>` | built-in `/wisp/` | Use a different WISP server (base64url encoded). |
+| `?wisp=<b64url>` | built-in `/wisp/` | Use a different wisp server (base64url encoded). |
 | `?jit=on\|off` | `off` | Enable the wasm JIT. |
 | `?gpu=on\|off` | `off` | Render through WebRender on WebGL2. |
 | `?gl=on\|off` | `on` | WebGL passthrough (only relevant with `gpu=on`). |
